@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
 from typing import Type, Dict
+import tqdm
 
 import numpy as np
 from codetiming import Timer
@@ -36,6 +37,43 @@ from verl.trainer.ppo import core_algos
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
 
 WorkerType = Type[Worker]
+
+
+from tqdm import tqdm
+from contextlib import contextmanager
+
+class ProgressBar:
+    """
+    A progress bar with dynamic metrics displayed to the right.
+    """
+    
+    def __init__(self, total_steps: int, desc: str = "Training", max_event_length: int = 100):
+        self.pbar = tqdm(
+            total=total_steps, 
+            desc=desc,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}",
+            postfix=""
+        )
+        self.max_event_length = max_event_length
+        
+    def update(self, step: int, epoch: int, event=None, increment: bool = True):
+        postfix_str = f"[E: {epoch}, S: {step}]"
+        if event: 
+            assert isinstance(event, str)
+            postfix_str += f", {event[:self.max_event_length]}"
+        self.pbar.set_postfix_str(postfix_str, refresh=False)
+
+        if increment:
+            self.pbar.update(1)
+    
+    def close(self):
+        self.pbar.close()
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, *args):
+        self.close()
 
 
 class Role(Enum):
@@ -367,7 +405,9 @@ class RayPPOTrainer(object):
                                        max_prompt_length=self.config.data.max_prompt_length,
                                        filter_prompts=True,
                                        return_raw_chat=self.config.data.get('return_raw_chat', False),
-                                       truncation='error')
+                                       truncation='error',
+                                       limit=self.config.data.get("val_data_limit", None),
+                                    )
         self.val_dataloader = DataLoader(dataset=self.val_dataset,
                                          batch_size=len(self.val_dataset),
                                          shuffle=True,
@@ -577,8 +617,11 @@ class RayPPOTrainer(object):
         # we start from step 1
         self.global_steps += 1
 
+        total_steps = self.config.trainer.total_epochs * len(self.train_dataloader)
+        
+        pbar = ProgressBar(total_steps)
         for epoch in range(self.config.trainer.total_epochs):
-            for batch_dict in self.train_dataloader:
+            for epoch_step, batch_dict in enumerate(self.train_dataloader):
                 metrics = {}
                 timing_raw = {}
 
@@ -589,6 +632,7 @@ class RayPPOTrainer(object):
 
                 with _timer('step', timing_raw):
                     # generate a batch
+                    pbar.update(epoch_step, epoch, "Generating responses ...")
                     with _timer('gen', timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
 
@@ -607,11 +651,13 @@ class RayPPOTrainer(object):
                     batch.meta_info['global_token_num'] = torch.sum(batch.batch['attention_mask'], dim=-1).tolist()
 
                     # recompute old_log_probs
+                    pbar.update(epoch_step, epoch, "Computing old_log_probs ...")
                     with _timer('old_log_prob', timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:
+                        pbar.update(epoch_step, epoch, "Computing ref_log_probs ...")
                         # compute reference log_prob
                         with _timer('ref', timing_raw):
                             ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
@@ -619,6 +665,7 @@ class RayPPOTrainer(object):
 
                     # compute values
                     if self.use_critic:
+                        pbar.update(epoch_step, epoch, "Computing critic values...")
                         with _timer('values', timing_raw):
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
@@ -629,10 +676,12 @@ class RayPPOTrainer(object):
                         # the results from reward model and rule-based results.
                         if self.use_rm:
                             # we first compute reward model score
+                            pbar.update(epoch_step, epoch, "Computing reward values...")
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
                         # we combine with rule-based rm
+                        pbar.update(epoch_step, epoch, "Computing advantage values...")
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
 
@@ -654,6 +703,7 @@ class RayPPOTrainer(object):
 
                     # update critic
                     if self.use_critic:
+                        pbar.update(epoch_step, epoch, "Updating critic...")
                         with _timer('update_critic', timing_raw):
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info['metrics'])
@@ -662,6 +712,7 @@ class RayPPOTrainer(object):
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
+                        pbar.update(epoch_step, epoch, "Updating actor...")
                         with _timer('update_actor', timing_raw):
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
@@ -670,12 +721,14 @@ class RayPPOTrainer(object):
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
                         self.global_steps % self.config.trainer.test_freq == 0:
+                        pbar.update(epoch_step, epoch, "Running validation ...")
                         with _timer('testing', timing_raw):
                             val_metrics: dict = self._validate()
                         metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and \
                             self.global_steps % self.config.trainer.save_freq == 0:
+                        pbar.update(epoch_step, epoch, "Saving checkpoints ...")
                         with _timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
 
@@ -687,6 +740,8 @@ class RayPPOTrainer(object):
                 logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
+                pbar.update(epoch_step, epoch, increment=True)
+
 
                 if self.global_steps >= self.total_training_steps:
 

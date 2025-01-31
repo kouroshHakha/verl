@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
 from typing import Type, Dict
-import tqdm
+from tqdm import tqdm
 
 import numpy as np
 from codetiming import Timer
@@ -39,8 +39,6 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 WorkerType = Type[Worker]
 
 
-from tqdm import tqdm
-from contextlib import contextmanager
 
 class ProgressBar:
     """
@@ -56,12 +54,12 @@ class ProgressBar:
         )
         self.max_event_length = max_event_length
         
-    def update(self, step: int, epoch: int, event=None, increment: bool = True):
+    def update(self, step: int, epoch: int, event=None, increment: bool = False):
         postfix_str = f"[E: {epoch}, S: {step}]"
         if event: 
             assert isinstance(event, str)
             postfix_str += f", {event[:self.max_event_length]}"
-        self.pbar.set_postfix_str(postfix_str, refresh=False)
+        self.pbar.set_postfix_str(postfix_str, refresh=True)
 
         if increment:
             self.pbar.update(1)

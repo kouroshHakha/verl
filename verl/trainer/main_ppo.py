@@ -23,7 +23,8 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
 def _select_rm_score_fn(data_source):
     if data_source == 'openai/gsm8k':
-        return gsm8k.compute_score
+        # return gsm8k.compute_score
+        return math.compute_score
     elif data_source == 'lighteval/MATH':
         return math.compute_score
     else:
@@ -167,7 +168,7 @@ def main_task(config):
         role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
         mapping[Role.RewardModel] = global_pool_id
 
-    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=0)
+    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)
 
     # Note that we always use function-based RM for validation
     val_reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)

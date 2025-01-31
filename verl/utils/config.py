@@ -85,5 +85,5 @@ def validate_config(config):
         if config.critic.ppo_micro_batch_size is not None:
             assert config.critic.ppo_mini_batch_size % config.critic.ppo_micro_batch_size == 0
             assert config.critic.ppo_micro_batch_size * sp_size >= n_gpus
-
+       
     print("[validate_config] All configuration checks passed successfully!")

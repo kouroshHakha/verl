@@ -13,19 +13,22 @@
 # limitations under the License.
 # Adapted from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/hendrycks_math/utils.py
 
+import re
+from verl.utils.reward_score.utils.parser import extract_answer 
+from verl.utils.reward_score.utils.grader import math_equal, strip_answer_string
 
-def compute_score(solution_str, ground_truth) -> float:
-    retval = 0.
-    try:
-        string_in_last_boxed = last_boxed_only_string(solution_str)
-        if string_in_last_boxed is not None:
-            answer = remove_boxed(string_in_last_boxed)
-            if is_equiv(answer, ground_truth):
-                retval = 1.
-    except Exception as e:
-        print(e)
+# def compute_score(solution_str, ground_truth) -> float:
+#     retval = 0.
+#     try:
+#         string_in_last_boxed = last_boxed_only_string(solution_str)
+#         if string_in_last_boxed is not None:
+#             answer = remove_boxed(string_in_last_boxed)
+#             if is_equiv(answer, ground_truth):
+#                 retval = 1.
+#     except Exception as e:
+#         print(e)
 
-    return retval
+#     return retval
 
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py
@@ -225,3 +228,70 @@ def strip_string(string):
     string = fix_a_slash_b(string)
 
     return string
+
+
+def compute_format_reward(text):
+    if not text:
+        return 0.0
+    
+    reward = 1.0
+    
+    # Check boxed answer pattern
+    boxed_pattern = r"boxed{.+}"
+
+    # format is correct if boxed in found in the answers
+    if re.search(boxed_pattern, text.strip()):
+        return reward
+    return 0.0
+
+    # if not re.search(boxed_pattern, text.strip()):
+    #     reward -= 0.3
+    
+    # # Check step formats
+    # steps = re.finditer(r"## Step \d+: .+?\n(.+?)(?=## Step|\Z)", text, re.DOTALL)
+    # total_steps = len(re.findall(r"## Step \d+:", text))
+    
+    # if total_steps == 0:
+    #     return 0.0
+        
+    # incorrect_steps = 0
+    # for step in steps:
+    #     step_content = step.group(1).strip()
+    #     # Check for double newline between reasoning steps
+    #     if not step_content or not re.match(r".+\n\n", step_content + "\n\n"):
+    #         incorrect_steps += 1
+    
+    # if incorrect_steps > 0:
+    #     reward -= 0.7 * (incorrect_steps / total_steps)
+    
+    # return max(0.0, reward)
+
+
+def compute_accuracy_reward(prediction_text, desired_answer):
+    # accuracy reward
+    pred_extracted = extract_answer(prediction_text, data_name="gsm8k")
+    pred_stripped = strip_answer_string(pred_extracted)
+
+    # exp_extracted = extract_answer(exp)
+    exp = strip_answer_string(desired_answer)
+
+    accuracy_reward = float(math_equal(pred_stripped, exp))
+
+    return accuracy_reward
+
+def strip_assistant_response(text):
+    pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>\n\n(.*?)<\|eot_id\|>'
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1) if match else None
+
+
+def compute_score(solution_str, ground_truth) -> float:
+        
+    # format reward
+    format_reward = compute_format_reward(solution_str)
+    accuracy_reward = compute_accuracy_reward(solution_str, ground_truth)
+
+
+    reward = (format_reward + accuracy_reward) / 2
+
+    return reward

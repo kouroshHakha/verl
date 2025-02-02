@@ -615,9 +615,8 @@ class RayPPOTrainer(object):
         # we start from step 1
         self.global_steps += 1
 
-        total_steps = self.config.trainer.total_epochs * len(self.train_dataloader)
         
-        pbar = ProgressBar(total_steps)
+        pbar = ProgressBar(self.total_training_steps)
         for epoch in range(self.config.trainer.total_epochs):
             for epoch_step, batch_dict in enumerate(self.train_dataloader):
                 metrics = {}
@@ -742,6 +741,10 @@ class RayPPOTrainer(object):
 
 
                 if self.global_steps >= self.total_training_steps:
+
+                    pbar.update(epoch_step, epoch, "Saving checkpoints ...")
+                    with _timer('save_checkpoint', timing_raw):
+                        self._save_checkpoint()
 
                     # perform validation after training
                     if self.val_reward_fn is not None:

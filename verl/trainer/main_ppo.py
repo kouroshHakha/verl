@@ -91,6 +91,18 @@ import ray
 import hydra
 
 
+ray.init(
+    runtime_env={
+            'env_vars': {
+                'WANDB_API_KEY': os.environ["WANDB_API_KEY"], 
+                'HF_HUB_ENABLE_HF_TRANSFER': '1'
+            },
+            'py_executable': 'uv run --isolated --directory ./verl',
+            "working_dir": "/home/ray/default"
+    }
+)
+
+
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
     if not ray.is_initialized():
